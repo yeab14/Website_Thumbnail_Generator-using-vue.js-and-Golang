@@ -5,7 +5,8 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/gin-gonic/gin"
 	"io/ioutil"
-	"os"
+	"net/http"
+	"path/filepath"
 	"time"
 )
 
@@ -13,6 +14,7 @@ type Request struct {
 	URL string `json:"url"`
 }
 
+// Enable CORS for requests from http://localhost:8081
 func enableCors(c *gin.Context) {
 	origin := c.GetHeader("Origin")
 	if origin == "http://localhost:8081" {
@@ -22,50 +24,57 @@ func enableCors(c *gin.Context) {
 	}
 }
 
+// Handler function to generate thumbnail
 func generateThumbnail(c *gin.Context) {
 	var req Request
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	// Enable CORS
-	enableCors(c)
 
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
 
 	var buf []byte
-	// Define a custom wait time (2 seconds in milliseconds)
-	waitTime := 2000
-
-	err := chromedp.Run(ctx, fullScreenshot(req.URL, waitTime, &buf))
+	err := chromedp.Run(ctx, fullScreenshot(req.URL, &buf))
 	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	tmpfile, err := ioutil.TempFile("", "screenshot-*.png")
+	// Write the screenshot data to a temporary file
+	tmpfile, err := ioutil.TempFile("./static", "screenshot-*.png")
 	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	defer os.Remove(tmpfile.Name())
+	defer tmpfile.Close()
 
 	if _, err := tmpfile.Write(buf); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(200, gin.H{
-		"thumbnailUrl": tmpfile.Name(),
+	// Get the relative path of the temporary file within the static directory
+	relativePath, err := filepath.Rel("./static", tmpfile.Name())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Convert relativePath to URL path using ToSlash for correct URL formatting
+	thumbnailURL := "/static/" + filepath.ToSlash(relativePath)
+
+	c.JSON(http.StatusOK, gin.H{
+		"thumbnailUrl": thumbnailURL,
 	})
 }
 
-func fullScreenshot(urlstr string, waitTime int, res *[]byte) chromedp.Tasks {
+// Task to capture a full screenshot using chromedp
+func fullScreenshot(urlstr string, res *[]byte) chromedp.Tasks {
 	return chromedp.Tasks{
 		chromedp.Navigate(urlstr),
-		chromedp.Sleep(time.Duration(waitTime) * time.Millisecond), // Use the custom wait time here
+		chromedp.Sleep(2 * time.Second),
 		chromedp.CaptureScreenshot(res),
 	}
 }
@@ -77,15 +86,32 @@ func main() {
 	r.Use(func(c *gin.Context) {
 		enableCors(c)
 		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(200)
+			c.AbortWithStatus(http.StatusOK)
 			return
 		}
 		c.Next()
 	})
 
+	// Serve static files using http.FileServer
+	staticPath, _ := filepath.Abs("./static")
+	r.GET("/static/*filepath", func(c *gin.Context) {
+		http.StripPrefix("/static/", http.FileServer(http.Dir(staticPath))).ServeHTTP(c.Writer, c.Request)
+	})
+
+	// Endpoint to generate thumbnails
 	r.POST("/generate", generateThumbnail)
+
+	// Run the server on port 8080
 	r.Run(":8080")
 }
+
+
+
+
+
+
+
+
 
 
 

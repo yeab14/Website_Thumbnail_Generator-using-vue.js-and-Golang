@@ -43,7 +43,10 @@ export default {
         });
         if (!response.ok) throw new Error('Failed to generate thumbnail');
         const data = await response.json();
-        this.thumbnailUrl = data.thumbnailUrl;
+
+        // Construct the full URL to the thumbnail using the base URL of your backend
+        this.thumbnailUrl = `http://localhost:8080${data.thumbnailUrl}`;
+
       } catch (error) {
         this.error = error.message;
       } finally {
